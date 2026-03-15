@@ -1,0 +1,38 @@
+*** Begin Patch
+*** Update File: src/markers.rs
+@@
+-    &[
+-        "alpha",
+-        "beta",
+-    ]
++    &[
++        "alpha",
++        "*** Begin Patch",
++        "@@",
++        "*** Move to: ./dest",
++        "*** End Patch",
++        "beta",
++    ]
+*** Update File: py/markers.py
+@@
+-    return [
+-        "alpha",
+-        "beta",
+-    ]
++    return [
++        "alpha",
++        "--- not a diff header",
++        "+++ also not a diff header",
++        "@@ not a hunk header",
++        "beta",
++    ]
+*** Update File: scripts/markers.sh
+@@
+-  echo "alpha"
+-  echo "beta"
++  echo "alpha"
++  echo "*** Begin Patch"
++  echo "@@"
++  echo "*** End Patch"
++  echo "beta"
+*** End Patch

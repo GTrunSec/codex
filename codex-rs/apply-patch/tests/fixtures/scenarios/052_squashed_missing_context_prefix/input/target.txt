@@ -1,0 +1,6 @@
+fn example() {
+    let mut keywords = metadata_get_string_list(metadata, "routing_keywords");
+    if let Some(extra) = explicit {
+        keywords.extend(extra);
+    }
+}

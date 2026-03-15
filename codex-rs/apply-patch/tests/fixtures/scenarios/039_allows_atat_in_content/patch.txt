@@ -1,0 +1,11 @@
+*** Begin Patch
+*** Add File: src/lib.rs
++pub fn render() -> &'static str {
++    let token = "@@render@@";
++    token
++}
+*** Add File: app.py
++def render():
++    token = "@@render@@"
++    return token
+*** End Patch

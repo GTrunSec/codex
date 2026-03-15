@@ -1,0 +1,7 @@
+*** Begin Patch
+*** Update File: target.txt
+@@
+-line1
++line1
+*** Begin Patch
+*** End Patch

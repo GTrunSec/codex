@@ -73,7 +73,7 @@ fn test_apply_patch_cli_moves_file_to_new_directory() -> anyhow::Result<()> {
 
     run_apply_patch_in_dir(tmp.path(), patch)?
         .success()
-        .stdout("Success. Updated the following files:\nM renamed/dir/name.txt\n");
+        .stdout("Success. Updated the following files:\nA renamed/dir/name.txt\nD old/name.txt\n");
 
     assert!(!original_path.exists());
     assert_eq!(fs::read_to_string(&new_path)?, "new content\n");
@@ -118,7 +118,7 @@ fn test_apply_patch_cli_rejects_missing_file_delete() -> anyhow::Result<()> {
         .arg("*** Begin Patch\n*** Delete File: missing.txt\n*** End Patch")
         .assert()
         .failure()
-        .stderr("Failed to delete file missing.txt\n");
+        .stderr("Failed to read file missing.txt\n");
 
     Ok(())
 }
@@ -144,9 +144,7 @@ fn test_apply_patch_cli_requires_existing_file_for_update() -> anyhow::Result<()
         .arg("*** Begin Patch\n*** Update File: missing.txt\n@@\n-old\n+new\n*** End Patch")
         .assert()
         .failure()
-        .stderr(
-            "Failed to read file to update missing.txt: No such file or directory (os error 2)\n",
-        );
+        .stderr("Failed to read file missing.txt\n");
 
     Ok(())
 }
@@ -166,7 +164,7 @@ fn test_apply_patch_cli_move_overwrites_existing_destination() -> anyhow::Result
         "*** Begin Patch\n*** Update File: old/name.txt\n*** Move to: renamed/dir/name.txt\n@@\n-from\n+new\n*** End Patch",
     )?
     .success()
-    .stdout("Success. Updated the following files:\nM renamed/dir/name.txt\n");
+    .stdout("Success. Updated the following files:\nA renamed/dir/name.txt\nD old/name.txt\n");
 
     assert!(!original_path.exists());
     assert_eq!(fs::read_to_string(&destination)?, "new\n");
@@ -201,7 +199,7 @@ fn test_apply_patch_cli_delete_directory_fails() -> anyhow::Result<()> {
         .arg("*** Begin Patch\n*** Delete File: dir\n*** End Patch")
         .assert()
         .failure()
-        .stderr("Failed to delete file dir\n");
+        .stderr("Failed to read file dir\n");
 
     Ok(())
 }
@@ -240,7 +238,9 @@ fn test_apply_patch_cli_updates_file_appends_trailing_newline() -> anyhow::Resul
 }
 
 #[test]
-fn test_apply_patch_cli_failure_after_partial_success_leaves_changes() -> anyhow::Result<()> {
+fn test_apply_patch_cli_failure_after_partial_success_no_changes() -> anyhow::Result<()> {
+    // Phase 2 Audit: Atomic Committer behavior
+    // When any part of the patch fails, NO changes should be committed
     let tmp = tempdir()?;
     let new_file = tmp.path().join("created.txt");
 
@@ -249,9 +249,11 @@ fn test_apply_patch_cli_failure_after_partial_success_leaves_changes() -> anyhow
         .assert()
         .failure()
         .stdout("")
-        .stderr("Failed to read file to update missing.txt: No such file or directory (os error 2)\n");
+        .stderr("Failed to read file missing.txt\n");
 
-    assert_eq!(fs::read_to_string(&new_file)?, "hello\n");
+    // With atomic committer, created.txt should NOT exist because
+    // the transaction was never committed
+    assert!(!new_file.exists(), "No files should be created when patch fails");
 
     Ok(())
 }

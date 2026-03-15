@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::path::Path;
+use std::path::PathBuf;
 
 use crate::apply_patch;
 use crate::apply_patch::InternalApplyPatchInvocation;
@@ -11,12 +13,15 @@ use crate::client_common::tools::ToolSpec;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
+use crate::protocol::FileChange;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
+use crate::tools::events::ToolEventFailure;
+use crate::tools::events::ToolEventStage;
 use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::orchestrator::ToolOrchestrator;
@@ -89,6 +94,20 @@ fn write_permissions_for_paths(file_paths: &[AbsolutePathBuf]) -> Option<Permiss
     crate::sandboxing::normalize_additional_permissions(permissions).ok()
 }
 
+async fn emit_apply_patch_failure(
+    session: &Session,
+    turn: &TurnContext,
+    tracker: Option<&SharedTurnDiffTracker>,
+    call_id: &str,
+    changes: HashMap<PathBuf, FileChange>,
+    failure: ToolEventFailure,
+) {
+    let emitter = ToolEmitter::apply_patch(changes, false);
+    let event_ctx = ToolEventCtx::new(session, turn, call_id, tracker);
+    emitter.emit(event_ctx, ToolEventStage::Failure(failure)).await;
+}
+
+
 #[async_trait]
 impl ToolHandler for ApplyPatchHandler {
     type Output = FunctionToolOutput;
@@ -138,13 +157,35 @@ impl ToolHandler for ApplyPatchHandler {
         let command = vec!["apply_patch".to_string(), patch_input.clone()];
         match codex_apply_patch::maybe_parse_apply_patch_verified(&command, &cwd) {
             codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
+                let protocol_changes = convert_apply_patch_to_protocol(&changes);
                 match apply_patch::apply_patch(turn.as_ref(), changes).await {
-                    InternalApplyPatchInvocation::Output(item) => {
-                        let content = item?;
-                        Ok(FunctionToolOutput::from_text(content, Some(true)))
-                    }
+                    InternalApplyPatchInvocation::Output(item) => match item {
+                        Ok(content) => Ok(FunctionToolOutput::from_text(content, Some(true))),
+                        Err(err) => {
+                            let (failure, err) = match err {
+                                FunctionCallError::RespondToModel(message) => (
+                                    ToolEventFailure::Rejected(message.clone()),
+                                    FunctionCallError::RespondToModel(message),
+                                ),
+                                other => {
+                                    let message = other.to_string();
+                                    (ToolEventFailure::Message(message), other)
+                                }
+                            };
+                            emit_apply_patch_failure(
+                                session.as_ref(),
+                                turn.as_ref(),
+                                Some(&tracker),
+                                &call_id,
+                                protocol_changes,
+                                failure,
+                            )
+                            .await;
+                            Err(err)
+                        }
+                    },
                     InternalApplyPatchInvocation::DelegateToExec(apply) => {
-                        let changes = convert_apply_patch_to_protocol(&apply.action);
+                        let changes = protocol_changes;
                         let file_paths = file_paths_for_action(&apply.action);
                         let effective_additional_permissions = apply_granted_turn_permissions(
                             session.as_ref(),
@@ -207,9 +248,17 @@ impl ToolHandler for ApplyPatchHandler {
                 }
             }
             codex_apply_patch::MaybeApplyPatchVerified::CorrectnessError(parse_error) => {
-                Err(FunctionCallError::RespondToModel(format!(
-                    "apply_patch verification failed: {parse_error}"
-                )))
+                let message = format!("apply_patch verification failed: {parse_error}");
+                emit_apply_patch_failure(
+                    session.as_ref(),
+                    turn.as_ref(),
+                    Some(&tracker),
+                    &call_id,
+                    HashMap::new(),
+                    ToolEventFailure::Message(message.clone()),
+                )
+                .await;
+                Err(FunctionCallError::RespondToModel(message))
             }
             codex_apply_patch::MaybeApplyPatchVerified::ShellParseError(error) => {
                 tracing::trace!("Failed to parse apply_patch input, {error:?}");
@@ -239,6 +288,7 @@ pub(crate) async fn intercept_apply_patch(
 ) -> Result<Option<FunctionToolOutput>, FunctionCallError> {
     match codex_apply_patch::maybe_parse_apply_patch_verified(command, cwd) {
         codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
+            let protocol_changes = convert_apply_patch_to_protocol(&changes);
             session
                 .record_model_warning(
                     format!(
@@ -248,12 +298,33 @@ pub(crate) async fn intercept_apply_patch(
                 )
                 .await;
             match apply_patch::apply_patch(turn.as_ref(), changes).await {
-                InternalApplyPatchInvocation::Output(item) => {
-                    let content = item?;
-                    Ok(Some(FunctionToolOutput::from_text(content, Some(true))))
-                }
+                InternalApplyPatchInvocation::Output(item) => match item {
+                    Ok(content) => Ok(Some(FunctionToolOutput::from_text(content, Some(true)))),
+                    Err(err) => {
+                        let (failure, err) = match err {
+                            FunctionCallError::RespondToModel(message) => (
+                                ToolEventFailure::Rejected(message.clone()),
+                                FunctionCallError::RespondToModel(message),
+                            ),
+                            other => {
+                                let message = other.to_string();
+                                (ToolEventFailure::Message(message), other)
+                            }
+                        };
+                        emit_apply_patch_failure(
+                            session.as_ref(),
+                            turn.as_ref(),
+                            tracker,
+                            call_id,
+                            protocol_changes,
+                            failure,
+                        )
+                        .await;
+                        Err(err)
+                    }
+                },
                 InternalApplyPatchInvocation::DelegateToExec(apply) => {
-                    let changes = convert_apply_patch_to_protocol(&apply.action);
+                    let changes = protocol_changes;
                     let approval_keys = file_paths_for_action(&apply.action);
                     let effective_additional_permissions = apply_granted_turn_permissions(
                         session.as_ref(),
@@ -314,9 +385,17 @@ pub(crate) async fn intercept_apply_patch(
             }
         }
         codex_apply_patch::MaybeApplyPatchVerified::CorrectnessError(parse_error) => {
-            Err(FunctionCallError::RespondToModel(format!(
-                "apply_patch verification failed: {parse_error}"
-            )))
+            let message = format!("apply_patch verification failed: {parse_error}");
+            emit_apply_patch_failure(
+                session.as_ref(),
+                turn.as_ref(),
+                tracker,
+                call_id,
+                HashMap::new(),
+                ToolEventFailure::Message(message.clone()),
+            )
+            .await;
+            Err(FunctionCallError::RespondToModel(message))
         }
         codex_apply_patch::MaybeApplyPatchVerified::ShellParseError(error) => {
             tracing::trace!("Failed to parse apply_patch input, {error:?}");

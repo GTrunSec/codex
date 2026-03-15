@@ -1,0 +1,3 @@
+        let routing_keywords = extract_routing_keywords(&metadata, helper.routing_keywords);
+Self {
+}

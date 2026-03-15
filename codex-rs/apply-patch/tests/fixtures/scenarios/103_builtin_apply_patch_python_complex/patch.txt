@@ -1,0 +1,101 @@
+*** Begin Patch
+*** Add File: py/complex_fstring_probe.py
++from __future__ import annotations
++
++from dataclasses import dataclass
++from typing import Iterable, List
++
++TOKEN_BANK = [
++    "ember",
++    "sable",
++    "cinder",
++    "argon",
++    "veil",
++    "spire",
++    "quartz",
++    "atlas",
++    "nova",
++    "lumen",
++    "rift",
++    "delta",
++    "pulse",
++    "glyph",
++]
++
++
++@dataclass
++class TokenMixer:
++    seed: int
++    tokens: List[str]
++
++    def next_u64(self) -> int:
++        self.seed = (self.seed * 6364136223846793005 + 1442695040888963407) & 0xFFFFFFFFFFFFFFFF
++        return self.seed
++
++    def pick(self, idx: int) -> str:
++        pivot = (self.next_u64() + idx) % len(self.tokens)
++        bias = (pivot + (idx % 7)) % len(self.tokens)
++        return self.tokens[bias]
++
++
++def build_payload(limit: int, prefixes: Iterable[str]) -> str:
++    prefix_list = list(prefixes)
++    if not prefix_list or limit <= 0:
++        return ""
++    mixer = TokenMixer(0xDEADBEEF, list(TOKEN_BANK))
++    stash: List[str] = []
++    for idx in range(limit):
++        pick = mixer.pick(idx)
++        prefix = prefix_list[idx % len(prefix_list)]
++        stash.append(f"{prefix}-{idx:04d}-{pick}")
++    return "|".join(stash)
++
++
++def summarize(payload: str) -> dict[str, int]:
++    counts: dict[str, int] = {}
++    for item in payload.split("|"):
++        token = item.rsplit("-", 1)[-1]
++        counts[token] = counts.get(token, 0) + 1
++    return counts
++
++
++def main() -> None:
++    payload = build_payload(24, ("alpha", "beta", "gamma", "delta"))
++    stats = summarize(payload)
++    best = max(stats.items(), key=lambda pair: (pair[1], pair[0]))[0]
++    print(best, len(payload))
++
++
++if __name__ == "__main__":
++    main()
+*** Add File: src/brace_operator_probe.rs
++pub fn build_labels(prefixes: &[&str], tokens: &[&str]) -> Vec<String> {
++    let mut out = Vec::new();
++    if prefixes.is_empty() || tokens.is_empty() {
++        return out;
++    }
++
++    let mut seed: u64 = 0xDEADBEEF;
++    for idx in 0..prefixes.len() {
++        seed = seed
++            .wrapping_mul(6364136223846793005)
++            .wrapping_add(1442695040888963407);
++        let pivot = (seed as usize + idx) % tokens.len();
++        let label = format!("{}-{:04}-{}", prefixes[idx], idx, tokens[pivot]);
++        out.push(label);
++    }
++
++    out
++}
++
++pub fn sum_pairs(values: &[i64]) -> i64 {
++    if values.len() < 2 {
++        return 0;
++    }
++    let mut total = 0;
++    for idx in 0..values.len() - 1 {
++        total += values[idx] + values[(idx + 1) % values.len()];
++    }
++    total
++}
+*** End Patch

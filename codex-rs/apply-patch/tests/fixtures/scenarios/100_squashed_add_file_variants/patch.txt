@@ -1,0 +1,10 @@
+*** Begin Patch
+*** Add File: hello.rs+fn main() {+    println!("hi");+}
+*** Add File: chain.txt
++line1+line2
+*** Add File: embedded_begin.txt
++literal *** Begin Patch in content
+*** Add File: embedded_end.txt
++line1*** End Patch
+*** Add File: end.txt+lastline*** End Patch
+*** End Patch

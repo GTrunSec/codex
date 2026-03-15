@@ -443,6 +443,21 @@ async fn apply_patch_reports_parse_diagnostics() -> anyhow::Result<()> {
         })
         .await?;
 
+    let mut patch_end_success = None;
+    wait_for_event(&codex, |event| match event {
+        EventMsg::PatchApplyEnd(end) => {
+            patch_end_success = Some(end.success);
+            true
+        }
+        _ => false,
+    })
+    .await;
+    assert_eq!(
+        patch_end_success,
+        Some(false),
+        "expected PatchApplyEnd to report failure for parse errors"
+    );
+
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let req = second_mock.single_request();

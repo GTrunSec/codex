@@ -1,0 +1,6 @@
+*** Begin Patch
+*** Update File: old.txt*** Move to: new.txt
+@@
+-old
++new
+*** End Patch
